@@ -1,0 +1,40 @@
+# Custom Values for Helm charts
+## Values.yaml for Logstash can be found here - https://github.com/elastic/helm-charts/blob/7.8/logstash/values.yaml
+persistence:
+  enabled: true
+
+logstashConfig:
+  logstash.yml: |
+    http.host: 0.0.0.0
+    xpack.monitoring.enabled: true
+    xpack.monitoring.elasticsearch.username: '${ELASTICSEARCH_USERNAME}'
+    xpack.monitoring.elasticsearch.password: '${ELASTICSEARCH_PASSWORD}'
+    xpack.monitoring.elasticsearch.hosts: ["https://clam-elasticsearch-es-http:9200"]
+    xpack.monitoring.elasticsearch.ssl.certificate_authority: /usr/share/logstash/config/certs/elastic-certificate.crt
+
+logstashPipeline:
+  uptime.conf: |
+    input { exec { command => "uptime" interval => 30 } }
+    output { 
+      elasticsearch { 
+        hosts => ["https://clam-elasticsearch-es-http:9200"] 
+        index => "logstash" 
+        user => '${ELASTICSEARCH_USERNAME}' 
+        password => '${ELASTICSEARCH_PASSWORD}'
+        cacert => "/usr/share/logstash/config/certs/elastic-certificate.crt"
+        } 
+    }
+
+secretMounts:
+  - name: elastic-certificate
+    secretName: clam-elasticsearch-es-http-certs-public
+    path: /usr/share/logstash/config/certs
+
+extraEnvs:
+  - name: "ELASTICSEARCH_USERNAME"
+    value: elastic
+  - name: "ELASTICSEARCH_PASSWORD"
+    valueFrom:
+      secretKeyRef:
+        name: clam-elasticsearch-es-elastic-user
+        key: elastic
