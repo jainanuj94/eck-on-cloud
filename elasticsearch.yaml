@@ -1,51 +1,89 @@
 apiVersion: elasticsearch.k8s.elastic.co/v1
 kind: Elasticsearch
 metadata:
-  name: clam-elasticsearch
+  name: elasticsearch
+  namespace: default
 spec:
-  version: 7.8.1
   http:
     service:
       spec:
-        type: LoadBalancer
+        ports:
+          - name: http
+            port: 9200
+            targetPort: 9200
+    tls:
+      selfSignedCertificate:
+        disabled: true
   nodeSets:
-    - name: default
-      count: 1
-      config:
-        node.master: true
+    - config:
         node.data: true
         node.ingest: true
+        node.master: true
+      count: 3
+      name: default
       podTemplate:
+        metadata:
+          annotations:
+            traffic.sidecar.istio.io/excludeInboundPorts: "9300"
+            traffic.sidecar.istio.io/excludeOutboundPorts: "9300"
+            traffic.sidecar.istio.io/includeInboundPorts: "*"
         spec:
+          automountServiceAccountToken: true
           containers:
-            - name: elasticsearch
+            - env:
+                - name: READINESS_PROBE_TIMEOUT
+                  value: "3"
+                - name: ES_JAVA_OPTS
+                  value: "-Xms2g -Xmx2g"
+              name: elasticsearch
               readinessProbe:
                 exec:
                   command:
                     - bash
-                    - -c
+                    - "-c"
                     - /mnt/elastic-internal/scripts/readiness-probe-script.sh
                 failureThreshold: 3
                 initialDelaySeconds: 10
                 periodSeconds: 5
                 successThreshold: 1
                 timeoutSeconds: 5
-              env:
-                - name: READINESS_PROBE_TIMEOUT
-                  value: "3"
+              resources:
+                limits:
+                  memory: 3Gi
+                requests:
+                  cpu: 100m
+                  memory: 3Gi
+              lifecycle:
+                postStart:
+                  exec:
+                    command:
+                      - sh
+                      - "-c"
+                      - "cd /scripts && ./configure-stack.sh"
           initContainers:
-            - name: sysctl-mmap
+            - command:
+                - sh
+                - "-c"
+                - sysctl -w vm.max_map_count=262144
+              name: sysctl-mmap
               securityContext:
                 privileged: true
-              command: ["sh", "-c", "sysctl -w vm.max_map_count=262144"]
-            - name: sysctl-swapoff
+            - command:
+                - sh
+                - "-c"
+                - sysctl -w vm.swappiness=1
+              name: sysctl-swapoff
               securityContext:
                 privileged: true
-              command: ["sh", "-c", "sysctl -w vm.swappiness=1"]
-            - name: sysctl-tcp-retries
+            - command:
+                - sh
+                - "-c"
+                - sysctl -w net.ipv4.tcp_retries2=5
+              name: sysctl-tcp-retries
               securityContext:
                 privileged: true
-              command: ["sh", "-c", "sysctl -w net.ipv4.tcp_retries2=5"]
+          nodeSelector:
+            nodeFor: eck-cluster
       volumeClaimTemplates:
         - metadata:
             name: elasticsearch-data
@@ -54,5 +92,24 @@ spec:
               - ReadWriteOnce
             resources:
               requests:
-                storage: 1Gi
-            storageClassName: standard
+                storage: 10Gi
+            storageClassName: gke1-tools1-sc1
+  image: gcr.io/{{project_id}}/eck/monitoring/elasticsearch:latest
+  version: 7.9.1
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: elasticsearch-service
+  namespace: default
+spec:
+  gateways:
+    - istio-system/elastic-ingressgateway
+  hosts:
+    - "*"
+  http:
+    - route:
+        - destination:
+            host: elasticsearch-es-http
+            port:
+              number: 9200
